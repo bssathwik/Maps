@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>gmaps</title>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+            display: flex;
+            gap: 10px;
+            z-index: 1000;
+        }
+        input, button {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            cursor: pointer;
+            background-color: #4285F4;
+            color: white;
+            border: none;
+        }
+        button:hover {
+            background-color: #357ae8;
+        }
+        .selected-route-info {
+            background-color: #e8f0fe;
+            font-weight: bold;
+        }
+        
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <input type="text" id="start" placeholder="Start location">
+        <input type="text" id="end" placeholder="Destination">
+        <button onclick="calculateRoute()">Get Directions</button>
+        <button onclick="getCurrentLocation()">Use My Location</button>
+        <button onclick="startNavigation()">Start Navigation</button>
+
+    </div>
+    <div id="route-info" style="position: absolute; top: 70px; left: 50%; transform: translateX(-50%); background: white; padding: 10px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); z-index: 999;"></div>
+    <div id="message-box" style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%); background:#fff; padding:10px 20px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,0.2); z-index:1000; display:none;"></div>
+
+    <div id="map"></div>
+    
+    <script>
+        let lastPosition = null;
+        let stopStartTime = null;
+        let IDLE_RADIUS = 30; // meters
+        let IDLE_TIME = 5 * 60 * 1000; // 5 minutes
+        let routeMarkers = []; // to hold R1, R2, etc.
+
+        let selectedRoute, navigationRenderer, watchId, userDot;
+    
+        let map, directionsService, userMarker;
+        let directionsRenderers = [];
+    
+    
+        function initMap() {
+            directionsService = new google.maps.DirectionsService();
+    
+            const defaultLocation = { lat: 37.7749, lng: -122.4194 }; // San Francisco
+            map = new google.maps.Map(document.getElementById("map"), {
+                center: defaultLocation,
+                zoom: 12,
+                mapTypeControl: true,
+                streetViewControl: true,
+                fullscreenControl: true,
+            });
+        }
+    
+        const routeColors = ['#FF0000', '#00FF00', '#0000FF', '#FFD700', '#FF69B4']; // Distinct route colors
+
+        function calculateRoute() {
+            const start = document.getElementById("start").value;
+            const end = document.getElementById("end").value;
+        
+            if (!start || !end) {
+                alert("Please enter both start and destination locations.");
+                return;
+            }
+        
+            const request = {
+                origin: start,
+                destination: end,
+                travelMode: 'DRIVING',
+                provideRouteAlternatives: true
+            };
+            if (userMarker) userMarker.setMap(null);
+            directionsService.route(request, (result, status) => {
+                if (status === 'OK') {
+                    // Clear old directions and markers
+                    directionsRenderers.forEach(renderer => renderer.setMap(null));
+                    directionsRenderers = [];
+        
+                    routeMarkers.forEach(marker => marker.setMap(null)); // clear R1, R2 markers
+                    routeMarkers = [];
+        
+                    const infoContainer = document.getElementById("route-info");
+                    infoContainer.innerHTML = "";
+        
+                    let shortestIndex = 0;
+                    let shortestDistance = result.routes[0].legs[0].distance.value;
+        
+                    result.routes.forEach((route, index) => {
+                        const leg = route.legs[0];
+        
+                        const renderer = new google.maps.DirectionsRenderer({
+                            map: map,
+                            directions: result,
+                            routeIndex: index,
+                            polylineOptions: {
+                                strokeColor: routeColors[index % routeColors.length],
+                                strokeWeight: 6,
+                                strokeOpacity: 0.9
+                            },
+                            suppressMarkers: true // prevent default A/B markers
+                        });
+        
+                        directionsRenderers.push(renderer);
+        
+                        // Add R1, R2 marker at route midpoint
+                        const steps = leg.steps;
+                        const midpointStep = steps[Math.floor(steps.length / 2)];
+                        const midpoint = midpointStep.end_location;
+        
+                        const marker = new google.maps.Marker({
+                            position: midpoint,
+                            map: map,
+                            label: {
+                                text: R${index + 1},
+                                color: "white",
+                                fontWeight: "bold"
+                            },
+                            icon: {
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 14,
+                                fillColor: "#333",
+                                fillOpacity: 0.9,
+                                strokeWeight: 0
+                            }
+                        });
+                        // Add source marker
+const startMarker = new google.maps.Marker({
+    position: leg.start_location,
+    map: map,
+    label: "S", // Start
+    title: "Start Location",
+    icon: {
+        path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
+        scale: 5,
+        fillColor: "#4CAF50",
+        fillOpacity: 0.9,
+        strokeWeight: 1
+    }
+});
+routeMarkers.push(startMarker);
+
+// Add destination marker
+const endMarker = new google.maps.Marker({
+    position: leg.end_location,
+    map: map,
+    label: "D", // Destination
+    title: "Destination",
+    icon: {
+        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+        scale: 5,
+        fillColor: "#F44336",
+        fillOpacity: 0.9,
+        strokeWeight: 1
+    }
+});
+routeMarkers.push(endMarker);
+
+                        routeMarkers.push(marker);
+        
+                        // Route info click selection
+                        const info = document.createElement("div");
+                        info.innerHTML = <strong>Route ${index + 1}:</strong> ${leg.distance.text}, ${leg.duration.text};
+                        info.style.cursor = "pointer";
+                        info.style.padding = "5px";
+                        info.style.borderRadius = "5px";
+        
+                        info.addEventListener("click", () => {
+    highlightRoute(index);
+    selectedRoute = {
+        fullResult: result,
+        index: index
+    };
+
+    // Remove selected class from all route info divs
+    Array.from(infoContainer.children).forEach(child => {
+        child.classList.remove("selected-route-info");
+    });
+
+    // Add selected class to clicked one
+    info.classList.add("selected-route-info");
+});
+
+        
+                        infoContainer.appendChild(info);
+        
+                        if (leg.distance.value < shortestDistance) {
+                            shortestDistance = leg.distance.value;
+                            shortestIndex = index;
+                        }
+                    });
+        
+                    // Auto select shortest route
+                    selectedRoute = {
+                        fullResult: result,
+                        index: shortestIndex
+                    };
+                    highlightRoute(shortestIndex);
+                } else {
+                    alert("Could not calculate route: " + status);
+                }
+            });
+
+            
+        }
+        
+    
+        function highlightRoute(routeIndex) {
+            directionsRenderers.forEach((renderer, index) => {
+                const isSelected = index === routeIndex;
+        
+                renderer.setOptions({
+                    polylineOptions: {
+                        strokeColor: isSelected ? "#4285F4" : routeColors[index % routeColors.length],
+                        strokeWeight: isSelected ? 8 : 4,
+                        strokeOpacity: isSelected ? 1 : 0.5
+                    }
+                });
+            });
+        
+            directionsRenderers[routeIndex].setZIndex(google.maps.Marker.MAX_ZINDEX + 1);
+        }
+        
+        
+function getVibrantColor() {
+    const hue = Math.floor(Math.random() * 360);
+    return hsl(${hue}, 100%, 50%);
+}
+
+
+    
+        function startNavigation() {
+            if (!selectedRoute) {
+                alert("Please calculate the route first.");
+                return;
+            }
+            // Remove R1, R2 label markers
+            routeMarkers.forEach(marker => marker.setMap(null));
+            routeMarkers = [];
+
+    
+            directionsRenderers.forEach(renderer => renderer.setMap(null));
+            directionsRenderers = [];
+    
+            navigationRenderer = new google.maps.DirectionsRenderer({
+                map: map,
+                directions: selectedRoute.fullResult,
+                routeIndex: selectedRoute.index,
+                suppressMarkers: true,
+                polylineOptions: {
+                    strokeColor: "#4285F4",
+                    strokeWeight: 6
+                }
+            });
+    
+            navigationRenderer.setMap(map);
+    
+            if (navigator.geolocation) {
+                if (watchId) navigator.geolocation.clearWatch(watchId);
+    
+                watchId = navigator.geolocation.watchPosition(position => {
+                    const userLatLng = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    };
+    
+                    map.setCenter(userLatLng);
+                    map.setZoom(17);
+    
+    
+                    if (!userDot) {
+                        userDot = new google.maps.Marker({
+                            position: userLatLng,
+                            map: map,
+                            icon: {
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 10,
+                                fillColor: "gray",
+                                fillOpacity: 1,
+                                strokeWeight: 0
+                            }
+                        });
+                    } else {
+                        userDot.setPosition(userLatLng);
+                    }
+                }, () => {
+                    alert("Unable to track your location.");
+                }, {
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 10000
+                });
+            } else {
+                alert("Geolocation is not supported by your browser.");
+            }
+        }
+    
+        function getCurrentLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(position => {
+                    const userLocation = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    };
+                    map.setCenter(userLocation);
+                    map.setZoom(14);
+    
+                    if (userMarker) userMarker.setMap(null);
+                    userMarker = new google.maps.Marker({
+                        position: userLocation,
+                        map: map,
+                        title: "Your Location",
+                        icon: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+                    });
+    
+                    document.getElementById("start").value = ${userLocation.lat}, ${userLocation.lng};
+                }, () => {
+                    alert("Geolocation service failed.");
+                }, { enableHighAccuracy: true, maximumAge: 0 });
+            } else {
+                alert("Your browser doesn't support geolocation.");
+            }
+        }
+    </script>
+    
+    
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAtd6hU4Gn6o9Vq_X_9eKwCPOErS27qUgQ&libraries=places&callback=initMap"></script>
+</body>
+</html>
